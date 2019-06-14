@@ -2,13 +2,18 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
-#include "RICC_Central/RF24Mesh/RF24Mesh.h"  
+#include "ricc/RF24Mesh/RF24Mesh.h"  
 #include <RF24/RF24.h>
 #include <RF24Network/RF24Network.h>
+
+#define n 1000
 
 RF24 radio(RPI_V2_GPIO_P1_15, BCM2835_SPI_CS0, BCM2835_SPI_SPEED_8MHZ);  
 RF24Network network(radio);
 RF24Mesh mesh(radio,network);
+
+int active_nodes[n] = {0};
+int active_nodes_tmp[n] = {0};
 
 struct payload_t {
   unsigned long ms;
@@ -47,56 +52,91 @@ Data_package data = {{0,0,0}, 0, {0,0,0}, 0, 0, 0, 0};
 
 uint32_t state = 0;
 
+int cfileexists(const char * filename){
+    /* try to open file to read */
+    FILE *file;
+    if(file = fopen(filename, "r")){
+        fclose(file);
+        return 1;
+    }
+    return 0;
+}
+
 void printData(int data_ID){
-  /*printf("Umidade do solo 1: \n");
-  printf("%lf \n",data.US.val1);
-  printf("Umidade do solo 2: \n");
-  printf("%lf \n",data.US.val2);
-  printf("Umidade do solo 3: \n");
-  printf("%lf \n",data.US.val3);
-  printf("Temperatura do solo: \n");
-  printf("%lf \n",data.TS);
-  printf("Direção do vento: \n");
-  printf("%d \n",data.WD);
-  printf("Pluviosidade: \n");
-  printf("%d \n",data.P);
-  printf("Velocidade do vento: \n");
-  printf("%lf \n",data.WS);
-  printf("Umidade do ar: \n");
-  printf("%lf \n",data.BME.U);
-  printf("Temperatura do ar: \n");
-  printf("%lf \n",data.BME.T);
-  printf("Pressão atmosférica: \n");
-  printf("%lf \n",data.BME.P);
-  printf("Radiação Solar: \n");
-  printf("%lf \n",data.R);
-  printf("\n");*/
   time_t ltime;
   ltime=time(NULL);
   char *str = asctime(localtime(&ltime));
   char *str_out;
   str_out = strtok(str, "\n");
-  fp=fopen("data.csv", "a");
-  fprintf(fp,"%d,%s,%lf,%lf,%lf,%lf,%d,%d,%lf,%lf,%lf,%lf,%lf\n", \
-          data_ID, str_out, data.US.val1, data.US.val2, \
+  char data_addr[80];
+  sprintf(data_addr, "data/%d_%s", data_ID, str_out);
+  fp=fopen(data_addr, "w+");
+  fprintf(fp,"%lf,%lf,%lf,%lf,%d,%d,%lf,%lf,%lf,%lf,%lf", \
+          data.US.val1, data.US.val2, \
           data.US.val3, data.TS, data.WD, data.P, data.WS, \
           data.BME.U, data.BME.T, data.BME.P, data.R);
   fclose(fp);
 }
 
-int main(int argc, char** argv) {
+void appendActiveNodes(int ID){
+  for(int i=0; i<n; i++){
+    if(active_nodes[i] == 0){
+      active_nodes[i] = ID;
+      break;
+    }
+  }
+}
 
-  // void setup  
-    // Set the nodeID to 0 for the master node
-    mesh.setNodeID(0);
-    // Connect to the mesh
-    printf("start\n");
-    mesh.begin();
-    radio.printDetails();
-    FILE *fs;
-    char ch;
-    int actuator_control;
-    int ID;
+void resetActiveNodes(){
+  for(int i=0; i<n; i++){
+    if(active_nodes[i] == 0){
+      break;
+    }
+    active_nodes[i] = 0;
+  }
+}
+
+int searchActiveNodes(int ID){
+  for(int i=0; i<n; i++){
+    if(active_nodes[i] == ID){
+      active_nodes[i] = ID;
+      return 1;
+    }
+    else if(active_nodes[i] == 0){
+      return 0;
+    }
+  }
+}
+
+void removeDeactiveNodes(){
+  if(active_nodes[0] == 0){
+    system("sudo rm -rf dev/");
+    system("mkdir dev");
+    system("sudo rm -rf data/");
+    system("mkdir data");
+  }
+  for(int i=0; i<n; i++){
+    if(active_nodes_tmp[i] == 0){
+      break;
+    }
+    if(!searchActiveNodes(active_nodes_tmp[i])){
+      char str_rem[80];
+      sprintf(str_rem, "sudo rm dev/est_%d", active_nodes_tmp[i]);
+      system(str_rem);
+    }
+  }
+}
+
+int main(int argc, char** argv) {
+  system("sudo rm dhcplist.txt");
+  mesh.setNodeID(0);
+  mesh.begin();
+  removeDeactiveNodes();
+  //radio.printDetails();
+  FILE *fs;
+  char ch;
+  int actuator_control;
+  int ID;
   // void loop
   while(1){
     mesh.update();
@@ -107,27 +147,33 @@ int main(int argc, char** argv) {
       RF24NetworkHeader header;
       network.peek(header);
       switch(header.type){
-        case 'P': 
+        case 'Q': 
           network.read(header,&data,sizeof(data));
           ID = mesh.getNodeID(header.from_node);
           printf("Received package from: ");
-          printf("%d \n", ID);
+          printf("%d (addr %d)\n", ID, mesh.getAddress(ID));
+          if(!searchActiveNodes(ID)){
+            appendActiveNodes(ID);
+          }
           printData(ID);
-          printf("**********************************\n");
+          //printf("**********************************\n");
           break;
-        case 'M':
+        case 'S':
           network.read(header, &state, sizeof(state));
           ID = mesh.getNodeID(header.from_node);
           printf("Received actuator state from: ");
-          printf("%d \n", ID);
+          printf("%d (addr %d) -> ", ID, mesh.getAddress(ID));
           if(state == 0){
-            printf("Actuator state OFF \n");
+            printf("OFF \n");
           }
           else if(state == 1){
-            printf("Actuator state ON \n");
+            printf("ON \n");
           }
           else{
             printf("Unknown state");
+          }
+          if(!searchActiveNodes(ID)){
+            appendActiveNodes(ID);
           }
           break;
         default:network.read(header, 0, 0);break;
@@ -135,41 +181,119 @@ int main(int argc, char** argv) {
     }
 
     if(millis() - displayTimer > 5000){
-      ctr++;
       printf("\n");
       printf("********Assigned Addresses********\n");
-      for(int i=0; i<mesh.addrListTop; i++){
-          payload_t payload = {millis(), ctr};
-          RF24NetworkHeader header(mesh.addrList[i].address, 8); //Constructing a header
-          if(network.write(header, &payload, sizeof(payload))==1){
-            printf("NodeID: ");
-            printf("%d", mesh.addrList[i].nodeID);
-            printf(" RF24Network Address: 0");
-            printf("%d \n", mesh.addrList[i].address);
-            if(mesh.addrList[i].nodeID == 1){
-              fs = fopen("control.txt", "r");
-              ch = fgetc(fs);
-              actuator_control = atoi(&ch);
-              if(actuator_control == 1 && state == 0){
-                printf("Sending to Actuator: ");
-                printf("%d \n", turn_on);
-                network.write(header, &turn_on, sizeof(turn_on));
-              }
-              else if(actuator_control==0 && state == 1){
-                printf("Sending to Actuator: ");
-                printf("%d \n", turn_off);
-                network.write(header, &turn_off, sizeof(turn_off));
-              }
-            }         
+      for(int i=0; i<n; i++){
+          if(active_nodes[i] == 0){
+            break;
           }
-          else{
-            mesh.remove(mesh.addrList[i].nodeID)
+          ID = active_nodes[i];
+          printf("NodeID: ");
+          printf("%d", ID);
+          printf(" RF24Network Address: ");
+          printf("%d \n", mesh.getAddress(ID));
+          char str[80];
+          sprintf(str, "dev/est_%d", ID);
+          if(!cfileexists(str)){
+              FILE *file;
+              file=fopen(str, "w+");
+              time_t ltime;
+              ltime=time(NULL);
+              char *str_time = asctime(localtime(&ltime));
+              char *str_out;
+              str_out = strtok(str_time, "\n");
+              fprintf(file,"%s", str_out);
+              fclose(file);
           }
-
+          if(active_nodes[i] == 1){
+            RF24NetworkHeader header(mesh.getAddress(ID), 8); //Constructing a header
+            fs = fopen("actuator/command", "r");
+            ch = fgetc(fs);
+            actuator_control = atoi(&ch);
+            if(actuator_control == 1 && state == 0){
+              printf("Sending to Actuator: ");
+              printf("%d \n", turn_on);
+              network.write(header, &turn_on, sizeof(turn_on));
+            }
+            else if(actuator_control==0 && state == 1){
+              printf("Sending to Actuator: ");
+              printf("%d \n", turn_off);
+              network.write(header, &turn_off, sizeof(turn_off));
+            }
+          }
       }
+      removeDeactiveNodes();
+      for(int k = 0; k < n; k++){
+        if(active_nodes[k] == 0){
+          break;
+        }
+        active_nodes_tmp[k] = active_nodes[k];
+      }
+      resetActiveNodes();
       printf("**********************************\n");
       displayTimer = millis();
     }
+
+    // if(millis() - displayTimer > 1000){
+    //   ctr++;
+    //   printf("\n");
+    //   printf("********Assigned Addresses********\n");
+    //   for(int i=0; i<mesh.addrListTop; i++){
+    //       payload_t payload = {millis(), ctr};
+    //       RF24NetworkHeader header(mesh.addrList[i].address, 8); //Constructing a header
+    //       int res = 0;
+    //       for(int j=0; j<5; j++){
+    //           res = network.write(header, &payload, sizeof(payload), header.to_node);
+    //           if(res==1){
+    //               break;
+    //           }
+    //       }
+    //       printf("i: %d\n", i);
+    //       if(res==1){
+    //         printf("NodeID: ");
+    //         printf("%d", mesh.addrList[i].nodeID);
+    //         printf(" RF24Network Address: ");
+    //         printf("%d \n", mesh.addrList[i].address);
+    //         char str[80];
+    //         sprintf(str, "dev/est_%d", mesh.addrList[i].nodeID);
+    //         if(!cfileexists(str)){
+    //             FILE *file;
+    //             file=fopen(str, "w+");
+    //             time_t ltime;
+    //             ltime=time(NULL);
+    //             char *str_time = asctime(localtime(&ltime));
+    //             char *str_out;
+    //             str_out = strtok(str_time, "\n");
+    //             fprintf(file,"%s", str_out);
+    //             fclose(file);
+    //         }
+    //         if(mesh.addrList[i].nodeID == 1){
+    //           fs = fopen("actuator/control.txt", "r");
+    //           ch = fgetc(fs);
+    //           actuator_control = atoi(&ch);
+    //           if(actuator_control == 1 && state == 0){
+    //             printf("Sending to Actuator: ");
+    //             printf("%d \n", turn_on);
+    //             network.write(header, &turn_on, sizeof(turn_on));
+    //           }
+    //           else if(actuator_control==0 && state == 1){
+    //             printf("Sending to Actuator: ");
+    //             printf("%d \n", turn_off);
+    //             network.write(header, &turn_off, sizeof(turn_off));
+    //           }
+    //         }      
+    //       }
+    //       // else{
+    //       //     char str_rem[80];
+    //       //     sprintf(str_rem, "sudo rm dev/est_%d", mesh.addrList[i].nodeID);
+    //       //     system(str_rem);
+    //       //     mesh.remove(mesh.addrList[i].nodeID);
+    //       // }             
+    //   }
+    //   printf("**********************************\n");
+    //   displayTimer = millis();
+    // }
+    delay(2);
   }
 
   return 0;
