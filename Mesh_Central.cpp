@@ -29,20 +29,20 @@ uint32_t displayTimer = 0;
 FILE *fp;
 
 struct BME_res{
-    float U;
-    float T;
-    float P;
+    uint16_t U;
+    uint16_t T;
+    uint16_t P;
 };
 
 struct Soil_res{
-    float val1, val2, val3;
+    uint8_t val1, val2, val3;
 };
 
 struct Data_package{
   Soil_res US;
-  float TS;
+  uint16_t TS;
   BME_res BME;
-  float R;
+  uint16_t R;
   float WS;
   uint16_t WD;
   uint16_t P;
@@ -53,9 +53,8 @@ Data_package data = {{0,0,0}, 0, {0,0,0}, 0, 0, 0, 0};
 uint32_t state = 0;
 
 int cfileexists(const char * filename){
-    /* try to open file to read */
     FILE *file;
-    if(file = fopen(filename, "r")){
+    if((file = fopen(filename, "r"))){
         fclose(file);
         return 1;
     }
@@ -71,7 +70,7 @@ void printData(int data_ID){
   char data_addr[80];
   sprintf(data_addr, "data/%d_%s", data_ID, str_out);
   fp=fopen(data_addr, "w+");
-  fprintf(fp,"%lf,%lf,%lf,%lf,%d,%d,%lf,%lf,%lf,%lf,%lf", \
+  fprintf(fp,"%d,%d,%d,%d,%d,%d,%.2f,%d,%d,%d,%d", \
           data.US.val1, data.US.val2, \
           data.US.val3, data.TS, data.WD, data.P, data.WS, \
           data.BME.U, data.BME.T, data.BME.P, data.R);
@@ -99,13 +98,13 @@ void resetActiveNodes(){
 int searchActiveNodes(int ID){
   for(int i=0; i<n; i++){
     if(active_nodes[i] == ID){
-      active_nodes[i] = ID;
       return 1;
     }
     else if(active_nodes[i] == 0){
       return 0;
     }
   }
+  return -1;
 }
 
 void removeDeactiveNodes(){
@@ -115,14 +114,16 @@ void removeDeactiveNodes(){
     system("sudo rm -rf data/");
     system("mkdir data");
   }
-  for(int i=0; i<n; i++){
-    if(active_nodes_tmp[i] == 0){
-      break;
-    }
-    if(!searchActiveNodes(active_nodes_tmp[i])){
-      char str_rem[80];
-      sprintf(str_rem, "sudo rm dev/est_%d", active_nodes_tmp[i]);
-      system(str_rem);
+  else{
+    for(int i=0; i<n; i++){
+      if(active_nodes_tmp[i] == 0){
+        break;
+      }
+      if(!searchActiveNodes(active_nodes_tmp[i])){
+        char str_rem[80];
+        sprintf(str_rem, "sudo rm dev/est_%d", active_nodes_tmp[i]);
+        system(str_rem);
+      }
     }
   }
 }
@@ -132,7 +133,6 @@ int main(int argc, char** argv) {
   mesh.setNodeID(0);
   mesh.begin();
   removeDeactiveNodes();
-  //radio.printDetails();
   FILE *fs;
   char ch;
   int actuator_control;
@@ -152,11 +152,34 @@ int main(int argc, char** argv) {
           ID = mesh.getNodeID(header.from_node);
           printf("Received package from: ");
           printf("%d (addr %d)\n", ID, mesh.getAddress(ID));
+          // printf("Enviando os dados\n");
+          // printf("\n");
+          // printf("Umidade do solo 1: ");
+          // printf("%d\n", data.US.val1);
+          // printf("Umidade do solo 2: ");
+          // printf("%d\n", data.US.val2);
+          // printf("Umidade do solo 3: ");
+          // printf("%d\n", data.US.val3);
+          // printf("Temperatura do solo: ");
+          // printf("%f\n", data.TS);
+          // printf("Direção do vento: ");
+          // printf("%d\n", data.WD);
+          // printf("Pluviosidade: ");
+          // printf("%d\n", data.P);
+          // printf("Velocidade do vento: ");
+          // printf("%f\n", data.WS);
+          // printf("Umidade do ar: ");
+          // printf("%lf\n", data.BME.U);
+          // printf("Temperatura do ar: ");
+          // printf("%f\n", data.BME.T);
+          // printf("Pressão atmosférica: ");
+          // printf("%f\n", data.BME.P);
+          // printf("Radiação Solar: ");
+          // printf("%f\n", data.R);
           if(!searchActiveNodes(ID)){
             appendActiveNodes(ID);
           }
           printData(ID);
-          //printf("**********************************\n");
           break;
         case 'S':
           network.read(header, &state, sizeof(state));
@@ -196,7 +219,7 @@ int main(int argc, char** argv) {
           sprintf(str, "dev/est_%d", ID);
           if(!cfileexists(str)){
               FILE *file;
-              file=fopen(str, "w+");
+              file = fopen(str, "w+");
               time_t ltime;
               ltime=time(NULL);
               char *str_time = asctime(localtime(&ltime));
@@ -224,7 +247,7 @@ int main(int argc, char** argv) {
       }
       removeDeactiveNodes();
       for(int k = 0; k < n; k++){
-        if(active_nodes[k] == 0){
+        if(active_nodes[k] == 0 && active_nodes_tmp[k] == 0){
           break;
         }
         active_nodes_tmp[k] = active_nodes[k];
@@ -233,66 +256,6 @@ int main(int argc, char** argv) {
       printf("**********************************\n");
       displayTimer = millis();
     }
-
-    // if(millis() - displayTimer > 1000){
-    //   ctr++;
-    //   printf("\n");
-    //   printf("********Assigned Addresses********\n");
-    //   for(int i=0; i<mesh.addrListTop; i++){
-    //       payload_t payload = {millis(), ctr};
-    //       RF24NetworkHeader header(mesh.addrList[i].address, 8); //Constructing a header
-    //       int res = 0;
-    //       for(int j=0; j<5; j++){
-    //           res = network.write(header, &payload, sizeof(payload), header.to_node);
-    //           if(res==1){
-    //               break;
-    //           }
-    //       }
-    //       printf("i: %d\n", i);
-    //       if(res==1){
-    //         printf("NodeID: ");
-    //         printf("%d", mesh.addrList[i].nodeID);
-    //         printf(" RF24Network Address: ");
-    //         printf("%d \n", mesh.addrList[i].address);
-    //         char str[80];
-    //         sprintf(str, "dev/est_%d", mesh.addrList[i].nodeID);
-    //         if(!cfileexists(str)){
-    //             FILE *file;
-    //             file=fopen(str, "w+");
-    //             time_t ltime;
-    //             ltime=time(NULL);
-    //             char *str_time = asctime(localtime(&ltime));
-    //             char *str_out;
-    //             str_out = strtok(str_time, "\n");
-    //             fprintf(file,"%s", str_out);
-    //             fclose(file);
-    //         }
-    //         if(mesh.addrList[i].nodeID == 1){
-    //           fs = fopen("actuator/control.txt", "r");
-    //           ch = fgetc(fs);
-    //           actuator_control = atoi(&ch);
-    //           if(actuator_control == 1 && state == 0){
-    //             printf("Sending to Actuator: ");
-    //             printf("%d \n", turn_on);
-    //             network.write(header, &turn_on, sizeof(turn_on));
-    //           }
-    //           else if(actuator_control==0 && state == 1){
-    //             printf("Sending to Actuator: ");
-    //             printf("%d \n", turn_off);
-    //             network.write(header, &turn_off, sizeof(turn_off));
-    //           }
-    //         }      
-    //       }
-    //       // else{
-    //       //     char str_rem[80];
-    //       //     sprintf(str_rem, "sudo rm dev/est_%d", mesh.addrList[i].nodeID);
-    //       //     system(str_rem);
-    //       //     mesh.remove(mesh.addrList[i].nodeID);
-    //       // }             
-    //   }
-    //   printf("**********************************\n");
-    //   displayTimer = millis();
-    // }
     delay(2);
   }
 
